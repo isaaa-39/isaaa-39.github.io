@@ -1,1 +1,320 @@
+<!DOCTYPE html>
+<html lang="az">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Secure Share — Fayl paylaşımı</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0d1422; --panel:#172235; --line:#30415c; --text:#edf3ff; --muted:#a9b8d0; --blue:#6387ff; --red:#b84b5b; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:22px; font-family:Arial,sans-serif; background:var(--bg); color:var(--text); }
+    main { max-width:980px; margin:18px auto; }
+    h1 { font-size:clamp(26px,4vw,35px); margin:0 0 7px; }
+    h2 { font-size:20px; margin-top:0; }
+    p { color:var(--muted); line-height:1.5; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px; margin:16px 0; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }
+    .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    label { display:block; margin:12px 0 6px; font-weight:600; }
+    input,button { width:100%; padding:12px; border-radius:8px; font:inherit; }
+    input { background:var(--bg); color:var(--text); border:1px solid #52617a; }
+    input[type=file] { padding:9px; }
+    button { border:0; background:var(--blue); color:white; font-weight:700; cursor:pointer; margin-top:12px; }
+    button.secondary { background:#354760; }
+    button.danger { background:var(--red); }
+    button:disabled { opacity:.6; cursor:wait; }
+    .hidden { display:none !important; }
+    .muted { font-size:13px; color:var(--muted); }
+    #status { white-space:pre-wrap; overflow-wrap:anywhere; }
+    .file-row,.log-row { padding:14px 0; border-top:1px solid var(--line); overflow-wrap:anywhere; }
+    .file-row:first-child,.log-row:first-child { border-top:0; }
+    .file-name { font-weight:700; overflow-wrap:anywhere; }
+    .actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:8px; }
+    .actions button { margin-top:8px; }
+    .pill { display:inline-block; border:1px solid var(--line); color:var(--muted); padding:5px 9px; border-radius:999px; font-size:12px; }
+    @media(max-width:520px) { body { padding:12px; } .panel { padding:15px; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="topbar">
+    <div>
+      <h1>Secure Share</h1>
+      <p>Faylları paylaş, yüklənmə və paylaşım fəaliyyətinə bax.</p>
+    </div>
+    <span class="pill">Tələbə layihəsi</span>
+  </div>
 
+  <section class="panel" id="authPanel">
+    <h2>Giriş</h2>
+    <p>E-poçt sahəsi yoxdur. İstifadəçi adı və parol yarat və ya daxil ol.</p>
+    <label for="username">İstifadəçi adı</label>
+    <input id="username" autocomplete="username" minlength="3" maxlength="24" placeholder="məsələn, isaaga_01">
+    <label for="password">Parol</label>
+    <input id="password" type="password" autocomplete="current-password" minlength="8" placeholder="Ən azı 8 simvol">
+    <div class="grid">
+      <button id="signup">Qeydiyyat</button>
+      <button id="login" class="secondary">Daxil ol</button>
+    </div>
+    <p class="muted">Bu demo Supabase Auth-a daxildə saxta texniki e-poçt ünvanı ötürür; istifadəçidən e-poçt istəmir və e-poçt göndərmir. Supabase-də email confirmation söndürülməlidir.</p>
+  </section>
+
+  <section id="appPanel">
+    <div class="panel topbar">
+      <div><h2 style="margin-bottom:5px">Fayl paneli</h2><div class="muted" id="whoami"></div></div>
+      <button id="logout" class="secondary hidden" style="width:auto">Çıxış</button>
+    </div>
+
+    <section class="panel hidden" id="uploadPanel">
+      <h2>Fayl yüklə</h2>
+      <label for="fileInput">Fayl seç (maksimum 10 MB)</label>
+      <input id="fileInput" type="file">
+      <button id="upload">Yüklə və paylaş</button>
+      <p class="muted">Fayllar bu layihədə ictimai paylaşılır: sayta girən və linki əldə edən hər kəs onları aça bilər. Şəxsi və həssas sənədlər yükləmə.</p>
+    </section>
+
+    <section class="panel">
+      <div class="topbar"><h2>Paylaşılan fayllar</h2><button id="refreshFiles" class="secondary" style="width:auto">Yenilə</button></div>
+      <div id="files"><p class="muted">Yüklənir...</p></div>
+    </section>
+
+    <section class="panel">
+      <div class="topbar"><h2>Fəaliyyət qeydləri (Logs)</h2><button id="refreshLogs" class="secondary" style="width:auto">Yenilə</button></div>
+      <p class="muted">Qeydlər yükləmə, paylaşım linkinin köçürülməsi və silmə əməliyyatlarını göstərir. Bu, demo tətbiq logudur; tam və dəyişdirilməz audit sistemi deyil.</p>
+      <div id="logs"><p class="muted">Yüklənir...</p></div>
+    </section>
+  </section>
+
+  <section class="panel"><h2>Sistem vəziyyəti</h2><p id="status" role="status" aria-live="polite">Supabase konfiqurasiyası gözlənilir.</p></section>
+</main>
+
+<script type="module">
+  import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+  // Supabase Dashboard-dan bu iki dəyəri əlavə et.
+  const SUPABASE_URL = "https://tjoragtdxnppnwocrrak.supabase.co";
+  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_6unFZPg-bVdE5hjgGFm4NA_XncO2yTi";
+  const BUCKET = "secure-share-public";
+  const MAX_FILE_SIZE = 10 * 1024 * 1024;
+  const INTERNAL_DOMAIN = "@secure-share.example.com";
+
+  const $ = id => document.getElementById(id);
+  const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  let currentUser = null;
+  let currentUsername = "";
+
+  function setStatus(message) { $("status").textContent = message; }
+  function safeEl(tag, value, className = "") {
+    const el = document.createElement(tag);
+    el.textContent = value ?? "";
+    if (className) el.className = className;
+    return el;
+  }
+  function getUsername() {
+    const username = $("username").value.trim().toLowerCase();
+    if (!/^[a-z0-9._-]{3,24}$/.test(username)) {
+      throw new Error("İstifadəçi adı 3–24 simvol olmalı, yalnız a-z, 0-9, nöqtə, _ və - işlətməlidir.");
+    }
+    return username;
+  }
+  function internalEmail(username) { return username + INTERNAL_DOMAIN; }
+  function explain(error) {
+    const message = error?.message || "Naməlum xəta";
+    if (/invalid login credentials/i.test(message)) return "İstifadəçi adı və ya parol yanlışdır.";
+    if (/row-level security|permission denied|not allowed/i.test(message)) return "İcazə xətası. SQL siyasətlərini və storage bucket adını yoxla. Detal: " + message;
+    return message;
+  }
+  async function run(fn) {
+    try { setStatus("Əməliyyat icra olunur..."); await fn(); }
+    catch (error) { console.error(error); setStatus("Xəta: " + explain(error)); }
+  }
+
+  async function signup() {
+    const username = getUsername();
+    const password = $("password").value;
+    if (password.length < 8) throw new Error("Parol ən azı 8 simvol olmalıdır.");
+    const { data, error } = await supabase.auth.signUp({
+      email: internalEmail(username), password,
+      options: { data: { username } }
+    });
+    if (error) throw error;
+    if (!data.session) {
+      setStatus("Hesab yaradıldı, amma Supabase hələ e-poçt təsdiqi tələb edir. Authentication parametrlərində Confirm email söndür, sonra yenidən sına.");
+      return;
+    }
+    currentUser = data.user;
+    currentUsername = username;
+    await showApp();
+  }
+  async function login() {
+    const username = getUsername();
+    const password = $("password").value;
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: internalEmail(username), password
+    });
+    if (error) throw error;
+    currentUser = data.user;
+    currentUsername = username;
+    await showApp();
+  }
+  async function logout() {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
+    currentUser = null;
+    currentUsername = "";
+    $("authPanel").classList.remove("hidden");
+    $("uploadPanel").classList.add("hidden");
+    $("logout").classList.add("hidden");
+    $("password").value = "";
+    await Promise.all([loadFiles(), loadLogs()]);
+    setStatus("Çıxış edildi. Paylaşılan faylları giriş etmədən də görə bilərsən.");
+  }
+  async function showApp() {
+    $("authPanel").classList.add("hidden");
+    $("appPanel").classList.remove("hidden");
+    $("uploadPanel").classList.remove("hidden");
+    $("logout").classList.remove("hidden");
+    $("whoami").textContent = "İstifadəçi: " + (currentUsername || currentUser.user_metadata?.username || "hesab");
+    await Promise.all([loadFiles(), loadLogs()]);
+    setStatus("Daxil olundu. Burada bütün istifadəçilərin paylaşdığı faylları və logları görə bilərsən.");
+  }
+  async function logAction(action, fileName, details = "") {
+    if (!currentUser) return;
+    const { error } = await supabase.from("activity_logs").insert({
+      user_id: currentUser.id,
+      username: currentUsername || currentUser.user_metadata?.username || "user",
+      action, file_name: fileName || null, details: details || null
+    });
+    if (error) console.warn("Log yazılmadı:", error.message);
+  }
+  async function uploadFile() {
+    if (!currentUser) throw new Error("Əvvəlcə daxil ol.");
+    const file = $("fileInput").files[0];
+    if (!file) throw new Error("Əvvəlcə fayl seç.");
+    if (file.size > MAX_FILE_SIZE) throw new Error("Fayl 10 MB-dan böyükdür.");
+    const cleanName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100) || "file";
+    const path = currentUser.id + "/" + crypto.randomUUID() + "_" + cleanName;
+    const { error: uploadError } = await supabase.storage.from(BUCKET).upload(path, file, {
+      upsert: false, contentType: file.type || "application/octet-stream"
+    });
+    if (uploadError) throw uploadError;
+    const { data: publicData } = supabase.storage.from(BUCKET).getPublicUrl(path);
+    const { error: dbError } = await supabase.from("shared_files").insert({
+      user_id: currentUser.id, username: currentUsername,
+      file_name: file.name, storage_path: path,
+      public_url: publicData.publicUrl,
+      content_type: file.type || "application/octet-stream",
+      size_bytes: file.size
+    });
+    if (dbError) {
+      await supabase.storage.from(BUCKET).remove([path]);
+      throw dbError;
+    }
+    await logAction("file_uploaded", file.name, "Fayl ictimai paylaşım üçün yükləndi.");
+    $("fileInput").value = "";
+    await Promise.all([loadFiles(), loadLogs()]);
+    setStatus("Fayl yükləndi və bütün ziyarətçilər üçün əlçatandır.");
+  }
+  async function loadFiles() {
+    const { data, error } = await supabase.from("shared_files")
+      .select("id,user_id,username,file_name,storage_path,public_url,size_bytes,created_at")
+      .order("created_at", { ascending: false }).limit(100);
+    if (error) throw error;
+    const box = $("files"); box.replaceChildren();
+    if (!data.length) { box.append(safeEl("p", "Hələ fayl yoxdur.", "muted")); return; }
+    for (const file of data) {
+      const row = document.createElement("div"); row.className = "file-row";
+      row.append(
+        safeEl("div", file.file_name, "file-name"),
+        safeEl("div", `${file.username || "istifadəçi"} · ${formatSize(file.size_bytes)} · ${new Date(file.created_at).toLocaleString()}`, "muted")
+      );
+      const actions = document.createElement("div"); actions.className = "actions";
+      const download = safeEl("button", "Aç / yüklə");
+      const share = safeEl("button", "Linki köçür"); share.className = "secondary";
+      actions.append(download, share);
+      download.addEventListener("click", () => run(async () => {
+        window.open(file.public_url, "_blank", "noopener");
+        await logAction("file_opened", file.file_name, "İctimai fayl linki açıldı.");
+        await loadLogs();
+        setStatus("İctimai fayl açıldı. Linkə sahib olan hər kəs fayla baxa bilər.");
+      }));
+      share.addEventListener("click", () => run(async () => {
+        let copied = false;
+        try { await navigator.clipboard.writeText(file.public_url); copied = true; }
+        catch { window.prompt("Bu linki köçür:", file.public_url); }
+        await logAction("share_link_copied", file.file_name, "İctimai link paylaşım üçün göstərildi.");
+        await loadLogs();
+        setStatus(copied ? "İctimai link clipboard-a köçürüldü." : "Linki açılan pəncərədən köçür.");
+      }));
+      if (currentUser && file.user_id === currentUser.id) {
+        const del = safeEl("button", "Sil"); del.className = "danger";
+        del.addEventListener("click", () => run(async () => {
+          if (!confirm(`"${file.file_name}" faylını hamı üçün silmək istəyirsən?`)) return;
+          const { error: storageError } = await supabase.storage.from(BUCKET).remove([file.storage_path]);
+          if (storageError) throw storageError;
+          const { error: rowError } = await supabase.from("shared_files").delete().eq("id", file.id);
+          if (rowError) throw rowError;
+          await logAction("file_deleted", file.file_name, "Fayl paylaşım siyahısından və storage-dən silindi.");
+          await Promise.all([loadFiles(), loadLogs()]);
+          setStatus("Fayl silindi.");
+        }));
+        actions.append(del);
+      }
+      row.append(actions); box.append(row);
+    }
+  }
+  async function loadLogs() {
+    const { data, error } = await supabase.from("activity_logs")
+      .select("username,action,file_name,details,created_at").order("created_at", { ascending: false }).limit(100);
+    if (error) throw error;
+    const box = $("logs"); box.replaceChildren();
+    if (!data.length) { box.append(safeEl("p", "Hələ log yoxdur.", "muted")); return; }
+    for (const item of data) {
+      const row = document.createElement("div"); row.className = "log-row";
+      row.append(
+        safeEl("div", logLabel(item.action), "file-name"),
+        safeEl("div", `${item.username || "istifadəçi"} · ${item.file_name || "—"} · ${new Date(item.created_at).toLocaleString()}`, "muted"),
+        safeEl("div", item.details || "", "muted")
+      );
+      box.append(row);
+    }
+  }
+  function logLabel(action) {
+    return ({
+      file_uploaded: "Fayl yükləndi",
+      file_opened: "Fayl linki açıldı",
+      share_link_copied: "Paylaşım linki köçürüldü",
+      file_deleted: "Fayl silindi"
+    })[action] || action;
+  }
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  $("signup").addEventListener("click", () => run(signup));
+  $("login").addEventListener("click", () => run(login));
+  $("logout").addEventListener("click", () => run(logout));
+  $("upload").addEventListener("click", () => run(uploadFile));
+  $("refreshFiles").addEventListener("click", () => run(loadFiles));
+  $("refreshLogs").addEventListener("click", () => run(loadLogs));
+
+  const { data: sessionResult } = await supabase.auth.getSession();
+  if (sessionResult.session) {
+    currentUser = sessionResult.session.user;
+    currentUsername = currentUser.user_metadata?.username || currentUser.email?.split("@")[0] || "user";
+    $("username").value = currentUsername;
+    try { await showApp(); } catch (error) { setStatus("Xəta: " + explain(error)); }
+  } else {
+    // Public visitors can browse shared files and logs without creating an account.
+    try {
+      await Promise.all([loadFiles(), loadLogs()]);
+      setStatus("İctimai rejim: fayllara və loglara baxa bilərsən. Fayl yükləmək üçün giriş et.");
+    } catch (error) {
+      setStatus("Xəta: " + explain(error));
+    }
+  }
+</script>
+</body>
+</html>
