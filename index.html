@@ -5,24 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Secure Share — Fayl paylaşımı</title>
   <style>
-    :root { color-scheme: dark; --bg:#0d1422; --panel:#172235; --line:#30415c; --text:#edf3ff; --muted:#a9b8d0; --blue:#6387ff; --red:#b84b5b; }
+    :root { color-scheme: dark; --bg:#12070a; --panel:#211014; --line:#58232e; --text:#fff0f2; --muted:#d1aeb6; --red:#f04455; --red-dark:#8f1d2c; --input:#17090d; }
     * { box-sizing:border-box; }
-    body { margin:0; padding:22px; font-family:Arial,sans-serif; background:var(--bg); color:var(--text); }
+    body { margin:0; padding:22px; font-family:Arial,sans-serif; background:radial-gradient(ellipse at top, #351019 0%, var(--bg) 58%); color:var(--text); min-height:100vh; }
     main { max-width:980px; margin:18px auto; }
     h1 { font-size:clamp(26px,4vw,35px); margin:0 0 7px; }
     h2 { font-size:20px; margin-top:0; }
     p { color:var(--muted); line-height:1.5; }
-    .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px; margin:16px 0; }
+    .panel { background:linear-gradient(145deg, #261117, var(--panel)); border:1px solid var(--line); border-radius:14px; padding:20px; margin:16px 0; box-shadow:0 10px 28px #00000022; }
     .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }
     .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
     label { display:block; margin:12px 0 6px; font-weight:600; }
     input,button { width:100%; padding:12px; border-radius:8px; font:inherit; }
-    input { background:var(--bg); color:var(--text); border:1px solid #52617a; }
+    input { background:var(--input); color:var(--text); border:1px solid #75404b; outline:none; }
+    input:focus { border-color:var(--red); box-shadow:0 0 0 3px #f0445524; }
     input[type=file] { padding:9px; }
-    button { border:0; background:var(--blue); color:white; font-weight:700; cursor:pointer; margin-top:12px; }
-    button.secondary { background:#354760; }
-    button.danger { background:var(--red); }
-    button:disabled { opacity:.6; cursor:wait; }
+    button { border:1px solid #ff6876; background:linear-gradient(135deg, #ef3348, #b91f36); color:white; font-weight:700; cursor:pointer; margin-top:12px; transition:filter .15s, transform .15s; }
+    button:hover:not(:disabled) { filter:brightness(1.12); transform:translateY(-1px); }
+    button.secondary { background:#4a1823; border-color:#75313f; }
+    button.danger { background:#781525; border-color:#a62b3d; }
+    button:disabled { opacity:.55; cursor:wait; transform:none; }
     .hidden { display:none !important; }
     .muted { font-size:13px; color:var(--muted); }
     #status { white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -93,15 +95,18 @@
 
   // Supabase Dashboard-dan bu iki dəyəri əlavə et.
   const SUPABASE_URL = "https://tjoragtdxnppnwocrrak.supabase.co";
-  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_6unFZPg-bVdE5hjgGFm4NA_XncO2yTi";
+  const SUPABASE_KEY = "sb_publishable_6unFZPg-bVdE5hjgGFm4NA_XncO2yTi";
   const BUCKET = "secure-share-public";
   const MAX_FILE_SIZE = 10 * 1024 * 1024;
   const INTERNAL_DOMAIN = "@secure-share.example.com";
 
   const $ = id => document.getElementById(id);
-  const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: false }
+  });
   let currentUser = null;
   let currentUsername = "";
+  let operationBusy = false;
 
   function setStatus(message) { $("status").textContent = message; }
   function safeEl(tag, value, className = "") {
@@ -120,13 +125,26 @@
   function internalEmail(username) { return username + INTERNAL_DOMAIN; }
   function explain(error) {
     const message = error?.message || "Naməlum xəta";
-    if (/invalid login credentials/i.test(message)) return "İstifadəçi adı və ya parol yanlışdır.";
-    if (/row-level security|permission denied|not allowed/i.test(message)) return "İcazə xətası. SQL siyasətlərini və storage bucket adını yoxla. Detal: " + message;
+    if (/email rate limit exceeded|over_email_send_rate_limit|email.*rate.*limit/i.test(message)) {
+      return "Supabase e-poçt limiti dolub. Bu layihədə Auth → Sign In / Providers → Email bölməsinə keç və Confirm email parametrini söndür. Sonra limitin açılmasını gözlə və Qeydiyyat düyməsini yalnız bir dəfə bas. Supabase-in standart e-poçt xidməti saatda cəmi 2 e-poçt göndərir; HTML bu server limitini özü sıfırlaya bilmir.";
+    }
+    if (/invalid login credentials/i.test(message)) return "İstifadəçi adı və ya parol yanlışdır. Hesab hələ yaradılmayıbsa, əvvəl Qeydiyyat et.";
+    if (/user already registered|email_exists/i.test(message)) return "Bu istifadəçi adı ilə hesab artıq mövcuddur. Qeydiyyat yox, Daxil ol düyməsini istifadə et.";
+    if (/email not confirmed|email_not_confirmed/i.test(message)) return "Hesabın e-poçt təsdiqi gözləyir. Supabase-də Confirm email parametrini söndür və yenidən yoxla.";
+    if (/row-level security|permission denied|not allowed/i.test(message)) return "İcazə xətası. Supabase SQL siyasətlərini və secure-share-public Storage bucket adını yoxla. Detal: " + message;
     return message;
   }
   async function run(fn) {
+    if (operationBusy) return;
+    operationBusy = true;
+    const buttons = [...document.querySelectorAll("button")];
+    buttons.forEach(button => button.disabled = true);
     try { setStatus("Əməliyyat icra olunur..."); await fn(); }
     catch (error) { console.error(error); setStatus("Xəta: " + explain(error)); }
+    finally {
+      operationBusy = false;
+      buttons.forEach(button => button.disabled = false);
+    }
   }
 
   async function signup() {
@@ -139,7 +157,7 @@
     });
     if (error) throw error;
     if (!data.session) {
-      setStatus("Hesab yaradıldı, amma Supabase hələ e-poçt təsdiqi tələb edir. Authentication parametrlərində Confirm email söndür, sonra yenidən sına.");
+      setStatus("Supabase hesabı yaratdı, amma giriş sessiyası vermədi. Auth → Sign In / Providers → Email bölməsində Confirm email parametrini söndür. Sonra eyni istifadəçi adı ilə Daxil ol düyməsini yoxla.");
       return;
     }
     currentUser = data.user;
@@ -228,20 +246,23 @@
         safeEl("div", file.file_name, "file-name"),
         safeEl("div", `${file.username || "istifadəçi"} · ${formatSize(file.size_bytes)} · ${new Date(file.created_at).toLocaleString()}`, "muted")
       );
+      const publicUrl = file.public_url || supabase.storage.from(BUCKET).getPublicUrl(file.storage_path).data.publicUrl;
       const actions = document.createElement("div"); actions.className = "actions";
       const download = safeEl("button", "Aç / yüklə");
       const share = safeEl("button", "Linki köçür"); share.className = "secondary";
       actions.append(download, share);
       download.addEventListener("click", () => run(async () => {
-        window.open(file.public_url, "_blank", "noopener");
+        if (!publicUrl) throw new Error("Bu fayl üçün paylaşım linki tapılmadı.");
+        window.open(publicUrl, "_blank", "noopener");
         await logAction("file_opened", file.file_name, "İctimai fayl linki açıldı.");
         await loadLogs();
         setStatus("İctimai fayl açıldı. Linkə sahib olan hər kəs fayla baxa bilər.");
       }));
       share.addEventListener("click", () => run(async () => {
         let copied = false;
-        try { await navigator.clipboard.writeText(file.public_url); copied = true; }
-        catch { window.prompt("Bu linki köçür:", file.public_url); }
+        if (!publicUrl) throw new Error("Bu fayl üçün paylaşım linki tapılmadı.");
+        try { await navigator.clipboard.writeText(publicUrl); copied = true; }
+        catch { window.prompt("Bu linki köçür:", publicUrl); }
         await logAction("share_link_copied", file.file_name, "İctimai link paylaşım üçün göstərildi.");
         await loadLogs();
         setStatus(copied ? "İctimai link clipboard-a köçürüldü." : "Linki açılan pəncərədən köçür.");
